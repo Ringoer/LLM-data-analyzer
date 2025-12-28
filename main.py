@@ -124,6 +124,20 @@ def parse_month_range(month_str: str) -> Tuple[datetime.datetime, datetime.datet
         return (datetime.datetime(2023, 11, 1, tzinfo=datetime.timezone.utc),
                 datetime.datetime(2025, 7, 1, tzinfo=datetime.timezone.utc))
 
+# 格式化创建时间和最后更新时间为"2023m11"格式
+def format_to_year_month(date_str):
+    """将日期字符串格式化为'2023m11'格式"""
+    if not date_str:
+        return ""
+    try:
+        # 解析日期字符串
+        from dateutil.parser import parse
+        dt = parse(date_str)
+        # 格式化为"2023m11"格式
+        return f"{dt.year}m{dt.month:02d}"
+    except:
+        return date_str  # 如果解析失败，返回原字符串
+
 def read_repo_list(file_path: str) -> List[Dict]:
     """从CSV文件读取仓库列表，支持格式: owner/name"""
     repos = []
@@ -626,14 +640,14 @@ def _sample_and_enrich_prs(owner: str, name: str, headers: Dict,
         # 小数量：全量获取
         sample_size = total_prs
         sampled_indices = list(range(total_prs))
-    elif total_prs <= 200:
-        # 中等数量：抽样30%
-        sample_size = max(30, int(total_prs * 0.3))
-        sample_size = min(sample_size, 100)  # 不超过100个
+    elif total_prs <= 500:
+        # 中等数量：抽样40%
+        sample_size = max(50, int(total_prs * 0.4))
+        sample_size = min(sample_size, 200)  # 不超过200个
         sampled_indices = random.sample(range(total_prs), sample_size)
     else:
         # 大数量：固定抽样数量 + 分层抽样
-        sample_size = min(50, total_prs // 20 + 20)  # 5% + 20，最多50个
+        sample_size = min(500, total_prs // 20 + 200)  # 5% + 200，最多500个
 
         # 按状态分层抽样
         open_prs = [i for i, pr in enumerate(pr_list) if pr.get("state") == "open"]
@@ -820,7 +834,7 @@ query($first: Int!, $cursor: String) {
         return []
 
 def get_pr_commits_sample_monthly(owner: str, name: str, monthly_pr_numbers: Dict[str, List[int]],
-                                 headers: Dict, max_sample_per_month: int = 10) -> Dict[str, Dict[int, int]]:
+                                 headers: Dict, max_sample_per_month: int = 30) -> Dict[str, Dict[int, int]]:
     """按月抽样获取PR的提交作者数（用于统计多作者PR）"""
     print("  按月抽样获取PR提交作者数...")
 
@@ -1475,7 +1489,7 @@ def calculate_overall_metrics(prs: List[Dict], issues: List[Dict],
     month_progress.complete()
 
     # 按月获取多作者PR数据
-    monthly_pr_authors = get_pr_commits_sample_monthly(owner, name, monthly_pr_numbers, headers, max_sample_per_month=10)
+    monthly_pr_authors = get_pr_commits_sample_monthly(owner, name, monthly_pr_numbers, headers, max_sample_per_month=30)
 
     print("  计算月度指标...")
     calc_progress = ProgressTracker(total_steps=len(months), description="  月度计算")
@@ -1538,8 +1552,11 @@ def calculate_overall_metrics(prs: List[Dict], issues: List[Dict],
             pr_authors_count = monthly_pr_authors[month_key]
             if pr_authors_count:
                 multi_author_prs = sum(1 for count in pr_authors_count.values() if count >= 2)
-                month_data["multi_author_pr_count"] = multi_author_prs
-                month_data["multi_author_pr_rate"] = round((multi_author_prs / len(pr_authors_count) * 100), 2)
+                prs = len(monthly_pr_numbers[month_key])
+                multi_author_pr_rate = round((multi_author_prs / len(pr_authors_count) * 100), 2)
+                multi_author_pr_count = int(multi_author_pr_rate * prs)
+                month_data["multi_author_pr_count"] = multi_author_pr_count
+                month_data["multi_author_pr_rate"] = multi_author_pr_rate
             else:
                 month_data["multi_author_pr_count"] = 0
                 month_data["multi_author_pr_rate"] = 0
@@ -1778,20 +1795,6 @@ def export_to_csv(data: Dict, filename_prefix: str):
         created_at = repo_info.get("created_at", "")
         updated_at = repo_info.get("updated_at", "")
 
-        # 格式化创建时间和最后更新时间为"2023m11"格式
-        def format_to_year_month(date_str):
-            """将日期字符串格式化为'2023m11'格式"""
-            if not date_str:
-                return ""
-            try:
-                # 解析日期字符串
-                from dateutil.parser import parse
-                dt = parse(date_str)
-                # 格式化为"2023m11"格式
-                return f"{dt.year}m{dt.month:02d}"
-            except:
-                return date_str  # 如果解析失败，返回原字符串
-
         formatted_created_at = format_to_year_month(created_at)
         formatted_updated_at = format_to_year_month(updated_at)
 
@@ -1836,15 +1839,8 @@ def export_to_csv(data: Dict, filename_prefix: str):
 
                 for month in months:
                     # 将月度时间格式化为"2023m11"格式
-                    try:
-                        # month 格式是 "2023-11"，需要转换为 "2023m11"
-                        year_month = month.split('-')
-                        if len(year_month) == 2:
-                            formatted_month = f"{year_month[0]}m{int(year_month[1]):02d}"
-                        else:
-                            formatted_month = month
-                    except:
-                        formatted_month = month
+                    # month 格式是 "2023-11"，需要转换为 "2023m11"
+                    formatted_month = format_to_year_month(month)
 
                     row = [
                         eco_id,                    # 模型生态
@@ -2038,7 +2034,6 @@ def main():
     successful = 0
     failed = 0
     analyzed_keys = set()  # 记录已经分析过的仓库键
-    repo_order = []  # 新增：记录仓库输入顺序
 
     # 首先去重，识别重复的仓库
     unique_repos = {}
@@ -2066,34 +2061,41 @@ def main():
         owner = repo_info["owner"]
         name = repo_info["name"]
         repo_key = f"{owner}/{name}"
+        result_key = f"input_{i:04d}_{owner}_{name}"
         print(f"\n[仓库 {i}/{len(repos)}]: {owner}/{name}")
-
-        # 新增：记录仓库顺序（无论是否重复）
-        if repo_key not in repo_order:
-            repo_order.append(repo_key)
 
         # 检查是否已经分析过此仓库
         if repo_key in analyzed_keys:
-            print(f"  跳过重复仓库: {repo_key}")
-            # 对于重复仓库，创建占位结果
-            all_results[repo_key] = {
+            print(f"  跳过重复仓库 {repo_key} 的API和Git分析，但保留自定义信息")
+
+            original_result = all_results[repo_key]
+
+            # 创建新的结果，复制数据但更新仓库信息
+            result = {
+                "overall": original_result.get("overall", {}),
+                "monthly": original_result.get("monthly", {}),
+                "sample_stats": original_result.get("sample_stats", {}),
                 "repository": {
                     "owner": owner,
                     "name": name,
                     "full_name": f"{owner}/{name}",
                     "eco_id": repo_info.get('eco_id', ''),
                     "project_id_num": repo_info.get('project_id_num', ''),
-                    "project_type_id": repo_info.get('project_type_id', ''),
-                    "created_at": "",
-                    "updated_at": "",
+                    "project_type": repo_info.get('project_type', ''),
+                    "created_at": original_result.get("repository", {}).get("created_at", ""),
+                    "updated_at": original_result.get("repository", {}).get("updated_at", ""),
                     "analysis_time": datetime.datetime.now().isoformat(),
                     "analysis_duration_seconds": 0,
-                    "error": "跳过: 重复仓库"
+                    "time_range": original_result.get("repository", {}).get("time_range", {}),
+                    "duplicate_source": repo_key
                 },
-                "error": True,
                 "skipped": True
             }
-            successful += 1  # 计为成功但跳过
+
+            # 保存结果，使用输入顺序作为唯一标识
+            all_results[result_key] = result
+
+            successful += 1
             repo_progress.update(1, f"跳过 {owner}/{name}")
             continue
 
@@ -2109,6 +2111,7 @@ def main():
             analyzed_keys.add(repo_key)
 
         all_results[repo_key] = result
+        all_results[result_key] = result
         repo_progress.update(1, f"完成 {owner}/{name}")
 
         # 只对新分析的仓库生成文件
@@ -2157,8 +2160,7 @@ def main():
                 "end": end_date.isoformat()
             },
             "skip_collect": args.skip_collect,
-            "skip_git": args.skip_git,
-            "repo_order": repo_order  # 新增：保存仓库顺序
+            "skip_git": args.skip_git
         },
         "repositories": all_results
     }
@@ -2182,35 +2184,48 @@ def main():
             writer.writerow(["跳过Git分析", summary["metadata"]["skip_git"]])
             writer.writerow([])
 
-            # 写入各仓库总体指标 - 按照输入顺序
+            # 写入各仓库总体指标 - 严格按照输入顺序
             writer.writerow(["各仓库总体指标"])
-            headers = ["仓库", "模型生态", "项目数值标识", "项目类型", "PR合并率 (%)", "Issue解决周期 (天)(倒数)", "RFC采纳率 (%)",
+            headers = ["仓库", "模型生态", "项目数值标识", "项目类型", "PR合并率 (%)", "Issue解决周期 (天)", "RFC采纳率 (%)",
                     "前10%开发者占比 (%)", "非merge代码提交次数", "多作者PR次数", "多作者PR比例 (%)",
                     "月度活跃贡献者数", "Fork总数", "Tag总数", "PR总数", "Issue总数", "创建时间", "最后更新时间"]
             writer.writerow(headers)
 
-            # 修改：按照输入顺序写入
-            for repo_key in repo_order:
-                result = summary["repositories"].get(repo_key)
-                if result and not result.get("error"):
+            # 严格按照输入顺序写入
+            for i, repo_info in enumerate(repos, 1):
+                owner = repo_info["owner"]
+                name = repo_info["name"]
+                repo_key = f"{owner}/{name}"
+
+                # 查找对应的结果
+                result_key = f"input_{i:04d}_{owner}_{name}"
+                result = all_results[result_key]
+
+                if result:
                     overall = result.get("overall", {})
                     repo = result.get("repository", {})
                     row = [repo_key]
                     row.append(repo.get("eco_id", ""))
                     row.append(repo.get("project_id_num", ""))
                     row.append(repo.get("project_type", ""))
-                    row.append(overall.get("pr_merge_rate", 0))
-                    row.append(overall.get("avg_issue_resolution_days", 0))
-                    row.append(overall.get("rfc_adoption_rate", 0))
-                    row.append(overall.get("top_10_developer_commit_percentage", 0))
-                    row.append(overall.get("total_non_merge_commits", 0))
-                    row.append(overall.get("multi_author_pr_count", 0))  # 多作者PR次数
-                    row.append(overall.get("multi_author_pr_rate", 0))   # 多作者PR比例
-                    row.append(overall.get("total_unique_contributors", 0))
-                    row.append(overall.get("total_forks", 0))
-                    row.append(overall.get("total_tags", 0))
-                    row.append(overall.get("total_prs", 0))
-                    row.append(overall.get("total_issues", 0))
+
+                    if result.get("error"):
+                        # 错误情况填0
+                        row.extend([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+                    else:
+                        row.append(overall.get("pr_merge_rate", 0))
+                        row.append(overall.get("avg_issue_resolution_days", 0))
+                        row.append(overall.get("rfc_adoption_rate", 0))
+                        row.append(overall.get("top_10_developer_commit_percentage", 0))
+                        row.append(overall.get("total_non_merge_commits", 0))
+                        row.append(overall.get("multi_author_pr_count", 0))
+                        row.append(overall.get("multi_author_pr_rate", 0))
+                        row.append(overall.get("total_unique_contributors", 0))
+                        row.append(overall.get("total_forks", 0))
+                        row.append(overall.get("total_tags", 0))
+                        row.append(overall.get("total_prs", 0))
+                        row.append(overall.get("total_issues", 0))
+
                     row.append(repo.get("created_at", ""))
                     row.append(repo.get("updated_at", ""))
                     writer.writerow(row)
@@ -2233,46 +2248,90 @@ def main():
             all_monthly_data = []
 
             # 修改：按照输入顺序遍历仓库
-            for repo_key in repo_order:
-                # 从repo_key中提取owner和name
-                if '/' in repo_key:
-                    owner, name = repo_key.split('/')
-                    project_name = f"{owner}_{name}"
-                    item_path = os.path.join(output_dir, project_name)
+            for i, repo_info in enumerate(repos, 1):
+                owner = repo_info["owner"]
+                name = repo_info["name"]
+                repo_key = f"{owner}/{name}"
+                result_key = f"input_{i:04d}_{owner}_{name}"
 
-                    # 检查目录是否存在
-                    if os.path.isdir(item_path):
-                        # 查找月度数据文件
-                        monthly_files = [f for f in os.listdir(item_path) if f.endswith('_monthly.csv')]
+                # 查找对应的结果
+                result = all_results.get(result_key)
 
-                        for monthly_file in monthly_files:
-                            monthly_path = os.path.join(item_path, monthly_file)
+                if result and not result.get("error"):
+                    # 从结果中获取仓库信息
+                    repo_info_data = result.get("repository", {})
+                    eco_id = repo_info_data.get('eco_id', '')
+                    project_id_num = repo_info_data.get('project_id_num', '')
+                    project_type = repo_info_data.get('project_type', '')
+                    created_at = repo_info_data.get("created_at", "")
+                    updated_at = repo_info_data.get("updated_at", "")
 
-                            # 读取CSV文件
-                            try:
-                                with open(monthly_path, 'r', encoding='utf-8') as f:
-                                    reader = csv.reader(f)
+                    # 直接从内存中的monthly数据生成
+                    monthly_data = result.get("monthly", {})
+                    if monthly_data:
+                        # 获取所有月份
+                        months = sorted(monthly_data.get("pr_counts", {}).keys())
 
-                                    # 跳过可能的空行或标题行，直接读取数据
-                                    rows = list(reader)
-                                    if not rows:
-                                        continue
+                        for month in months:
+                            # 将月度时间格式化为"2023m11"格式
+                            formatted_month = format_to_year_month(month)
 
-                                    # 假设第一行是表头，第二行开始是数据
-                                    header = rows[0] if rows else []
-                                    data_rows = rows[1:] if len(rows) > 1 else []
+                            # 构建数据行
+                            row = [
+                                f"{owner}/{name}",  # 项目名称
+                                eco_id,
+                                project_id_num,
+                                project_type,
+                                created_at,  # 创建时间
+                                updated_at,  # 最后更新时间
+                                formatted_month,  # 月份
+                            ]
 
-                                    # 添加项目标识信息
-                                    for row in data_rows:
-                                        if len(row) >= 3:  # 确保有足够的列
-                                            # 添加项目名称列
-                                            row_with_project = [project_name] + row
-                                            all_monthly_data.append(row_with_project)
+                            # 添加月度数据
+                            # 1. 月度活跃贡献者数
+                            row.append(monthly_data.get("unique_contributors", {}).get(month, 0))
 
-                            except Exception as e:
-                                print(f"  读取文件 {monthly_file} 失败: {e}")
-                    else:
-                        print(f"  警告: 仓库 {repo_key} 的输出目录不存在，跳过")
+                            # 2. PR合并率
+                            pr_merge_rate = monthly_data.get("pr_merge_rates", {}).get(month, 0)
+                            row.append(f"{pr_merge_rate:.1f}")
+
+                            # 3. Issue解决周期（倒数）
+                            issue_days = monthly_data.get("avg_issue_resolution_days", {}).get(month, 0)
+                            if issue_days > 0:
+                                issue_inverse = 1 / issue_days
+                                row.append(f"{issue_inverse:.2f}")
+                            else:
+                                row.append("0.00")
+
+                            # 4. 交互数据总数
+                            interaction = monthly_data.get("interaction", {}).get(month, {})
+                            row.append(interaction.get("total", 0))
+
+                            # 5. RFC采纳率
+                            rfc_rate = monthly_data.get("rfc_adoption_rates", {}).get(month, 0)
+                            row.append(f"{rfc_rate:.1f}")
+
+                            # 6. 前10%开发者占比
+                            top10_rate = monthly_data.get("top_10_developer_percentages", {}).get(month, 0)
+                            row.append(f"{top10_rate:.1f}")
+
+                            # 7. 非merge提交数
+                            row.append(monthly_data.get("non_merge_commits", {}).get(month, 0))
+
+                            # 8. Tag数
+                            row.append(monthly_data.get("tags", {}).get(month, 0))
+
+                            # 9. Fork数
+                            row.append(monthly_data.get("forks", {}).get(month, 0))
+
+                            # 10. 多作者PR次数
+                            row.append(monthly_data.get("multi_author_pr_counts", {}).get(month, 0))
+
+                            # 11. 多作者PR比例
+                            multi_author_rate = monthly_data.get("multi_author_pr_rates", {}).get(month, 0)
+                            row.append(f"{multi_author_rate:.1f}")
+
+                            all_monthly_data.append(row)
 
             # 如果有月度数据，写入合并文件
             if all_monthly_data:
@@ -2301,11 +2360,10 @@ def main():
                     # 原始数据列对应关系:
                     # 0: 项目名称, 1: 模型生态, 2: 项目数值标识, 3: 项目类型,
                     # 4: 创建时间, 5: 最后更新时间, 6: 月度时间, 7: 月度活跃贡献者数,
-                    # 8: PR合并率 (%), 9: Issue解决周期 (天)(倒数), 10: 评论数,
-                    # 11: 反应数, 12: 每月评论和反应总数, 13: RFC采纳率 (%),
-                    # 14: 提交量前10%开发者占比 (%), 15: 月度非merge代码提交次数,
-                    # 16: 月度发布新版本次数, 17: 月度Fork数, 18: 多作者PR次数,
-                    # 19: 多作者PR比例 (%)
+                    # 8: PR合并率 (%), 9: Issue解决周期 (天)(倒数), 10: 每月评论和反应总数,
+                    # 11: RFC采纳率 (%), 12: 提交量前10%开发者占比 (%),
+                    # 13: 月度非merge代码提交次数, 14: 月度发布新版本次数, 15: 月度Fork数,
+                    # 16: 多作者PR次数, 17: 多作者PR比例 (%)
 
                     # 创建新的数据行，按照要求的顺序
                     new_row = [
@@ -2313,20 +2371,20 @@ def main():
                         row[1],  # eco_id (模型生态)
                         row[2],  # project_id_num (项目数值标识)
                         row[3],  # project_type (项目类型)
-                        row[4],  # created_at (创建时间)
-                        row[5],  # updated_at (最后更新时间)
+                        format_to_year_month(row[4]),  # created_at (创建时间)
+                        format_to_year_month(row[5]),  # updated_at (最后更新时间)
                         row[6],  # month_date (月份)
                         row[7],  # 月度活跃贡献者数
                         row[8],  # pr_merge_rate (月度PR合并率 %)
                         row[9],  # issue_resolve_cycle (月度Issue解决周期倒数)
-                        row[12], # comment_react_total (月度评论和反应总数)
-                        row[13], # rfc_adopt_rate (月度RFC采纳率 %)
-                        row[14], # top10_dev_ratio (月度提交量前10%开发者占比 %)
-                        row[15], # nonmerge_commit_month (月度非merge代码提交次数)
-                        row[16], # new_version_month (月度发布新版本次数)
-                        row[17], # fork_num (月度Fork数)
-                        row[18], # cross_org_collab (月度多作者PR次数)
-                        row[19]  # contributor_network_density (月度多作者PR比例 %)
+                        row[10], # comment_react_total (月度评论和反应总数)
+                        row[11], # rfc_adopt_rate (月度RFC采纳率 %)
+                        row[12], # top10_dev_ratio (月度提交量前10%开发者占比 %)
+                        row[13], # nonmerge_commit_month (月度非merge代码提交次数)
+                        row[14], # new_version_month (月度发布新版本次数)
+                        row[15], # fork_num (月度Fork数)
+                        row[16], # cross_org_collab (月度多作者PR次数)
+                        row[17]  # contributor_network_density (月度多作者PR比例 %)
                     ]
                     processed_data.append(new_row)
 
@@ -2344,7 +2402,6 @@ def main():
 
                 print(f"  ✓ 合并完成! 共合并 {len(all_monthly_data)} 行数据")
                 print(f"  ✓ 合并数据已保存到: {github_data_file}")
-                print(f"  ✓ 输出顺序按照输入文件顺序: {', '.join(repo_order[:min(5, len(repo_order))])}{'...' if len(repo_order) > 5 else ''}")
             else:
                 print("  ✗ 没有找到可合并的月度数据文件")
 
@@ -2370,20 +2427,6 @@ def main():
     print(f"独立结果: {args.output}_<owner>_<name> 在各自项目文件夹下")
     print(f"汇总结果: {args.output}_summary.csv")
     print(f"合并数据: github_data.csv (按输入顺序输出)")  # 修改提示信息
-
-    # 显示成功仓库的概要 - 按照输入顺序
-    if successful > 0:
-        print(f"\n成功分析仓库的概要 (按输入顺序):")
-        print("-" * 40)
-        for repo_key in repo_order:
-            result = all_results.get(repo_key)
-            if result and not result.get("error"):
-                overall = result.get("overall", {})
-                print(f"\n{repo_key}:")
-                print(f"  PR合并率: {overall.get('pr_merge_rate', 0):.1f}%")
-                print(f"  Issue平均解决周期: {overall.get('avg_issue_resolution_days', 0):.1f}天")
-                print(f"  RFC采纳率: {overall.get('rfc_adoption_rate', 0):.1f}%")
-                print(f"  非merge代码提交次数: {overall.get('total_non_merge_commits', 0)}")
 
     print(f"\n{'='*60}")
     print("所有任务完成!")
