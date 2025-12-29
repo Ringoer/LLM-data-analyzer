@@ -1554,7 +1554,7 @@ def calculate_overall_metrics(prs: List[Dict], issues: List[Dict],
                 multi_author_prs = sum(1 for count in pr_authors_count.values() if count >= 2)
                 prs = len(monthly_pr_numbers[month_key])
                 multi_author_pr_rate = round((multi_author_prs / len(pr_authors_count) * 100), 2)
-                multi_author_pr_count = int(multi_author_pr_rate * prs)
+                multi_author_pr_count = int(prs * multi_author_pr_rate / 100)
                 month_data["multi_author_pr_count"] = multi_author_pr_count
                 month_data["multi_author_pr_rate"] = multi_author_pr_rate
             else:
